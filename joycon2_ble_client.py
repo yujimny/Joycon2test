@@ -10,8 +10,9 @@ from bleak.backends.device import BLEDevice
 # Suppress FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# Joycon2 Manufacturer ID
+# Joycon2 / Procon2 Manufacturer ID (Nintendo Co., Ltd.)
 JOYCON2_MANUFACTURER_ID = 0x0553
+NINTENDO_MANUFACTURER_ID = 0x0553
 
 # Service and Characteristic UUIDs
 WRITE_CHARACTERISTIC_UUID = "649d4ac9-8eb7-4e6c-af44-1ea54fe5f005"
@@ -24,7 +25,7 @@ def to_uint16(b, offset):
     return struct.unpack_from("<H", b, offset)[0]
 
 def parse_stick(data, offset):
-    # Joy-Con stick is 12bit packed
+    # Stick is 12bit packed
     d = data[offset:offset+3]
     val = int.from_bytes(d, "little")
     x = val & 0xFFF
@@ -32,10 +33,14 @@ def parse_stick(data, offset):
     return x, y
 
 def parse_joycon2_data(data):
-    """Parse Joycon2 data"""
+    """Parse Joycon2 / Procon2 data"""
+    # Read buttons up to 6 bytes (48-bit little-endian) from offset 0x03 to include Grip buttons (GL/GR at byte 7)
+    buttons_len = 6 if len(data) >= 9 else (4 if len(data) >= 7 else 0)
+    buttons_val = int.from_bytes(data[0x03:0x03+buttons_len], "little") if buttons_len > 0 else 0
+
     parsed = {
         "PacketID": int.from_bytes(data[0x00:0x03], "little"),
-        "Buttons": int.from_bytes(data[0x03:0x07], "little"),
+        "Buttons": buttons_val,
 
         "LeftStick": parse_stick(data, 0x0A),
         "RightStick": parse_stick(data, 0x0D),
@@ -80,31 +85,40 @@ def parse_buttons(buttons):
     """Parse button states"""
     button_names = []
     
-    # Button bitmask definitions
+    # Button bitmask definitions (little-endian byte 3..8)
     button_masks = {
+        # Grip buttons (Procon2 back paddles, byte 7)
+        0x00000100000000: "GR",
+        0x00000200000000: "GL",
+
+        # Left cluster (byte 6)
         0x80000000: "ZL",
         0x40000000: "L",
-        0x00010000: "SELECT",
-        0x00080000: "LS",
-        0x01000000: "↓",
-        0x02000000: "↑",
-        0x04000000: "→",
-        0x08000000: "←",
-        0x00200000: "CAMERA",
-        0x10000000: "SR(L)",
         0x20000000: "SL(L)",
+        0x10000000: "SR(L)",
+        0x08000000: "←",
+        0x04000000: "→",
+        0x02000000: "↑",
+        0x01000000: "↓",
+
+        # Center / System (byte 5)
+        0x00400000: "CHAT/C",
+        0x00200000: "CAMERA",
         0x00100000: "HOME",
-        0x00400000: "CHAT",
-        0x00020000: "START",
-        0x00001000: "SR(R)",
-        0x00002000: "SL(R)",
-        0x00004000: "R",
-        0x00008000: "ZR",
+        0x00080000: "LS",
         0x00040000: "RS",
-        0x00000100: "Y",
-        0x00000200: "X",
+        0x00020000: "START(+)",
+        0x00010000: "SELECT(-)",
+
+        # Right cluster (byte 4)
+        0x00008000: "ZR",
+        0x00004000: "R",
+        0x00002000: "SL(R)",
+        0x00001000: "SR(R)",
+        0x00000800: "A",
         0x00000400: "B",
-        0x00000800: "A"
+        0x00000200: "X",
+        0x00000100: "Y",
     }
     
     for mask, name in button_masks.items():
@@ -113,7 +127,7 @@ def parse_buttons(buttons):
     
     return button_names
 
-def print_parsed_data(parsed):
+def print_parsed_data(parsed, device_type="Joycon2"):
     """Display parsed data"""
     global last_mouse_x, last_mouse_y
     
@@ -129,19 +143,20 @@ def print_parsed_data(parsed):
     button_names = parse_buttons(parsed['Buttons'])
     
     print("\n" + "="*50)
-    print("Joycon2 Data:")
+    print(f"{device_type} Data:")
     print("="*50)
     
     # Display important data with priority
     print(f"PacketID: {parsed['PacketID']}")
-    print(f"Buttons: {parsed['Buttons']:08X}")
+    print(f"Buttons: 0x{parsed['Buttons']:012X}")
     if button_names:
         print(f"Pressed: {', '.join(button_names)}")
     else:
         print("Pressed: None")
     print(f"LeftStick: X={parsed['LeftStick'][0]}, Y={parsed['LeftStick'][1]}")
     print(f"RightStick: X={parsed['RightStick'][0]}, Y={parsed['RightStick'][1]}")
-    print(f"Mouse: X={parsed['MouseX']}, Y={parsed['MouseY']}, DeltaX={mouse_delta_x}, DeltaY={mouse_delta_y}, Unk={parsed['MouseUnk']}, Distance={parsed['MouseDistance']}")
+    if device_type != "Procon2" or (parsed['MouseX'] != 0 or parsed['MouseY'] != 0 or parsed['MouseDistance'] != 0):
+        print(f"Mouse: X={parsed['MouseX']}, Y={parsed['MouseY']}, DeltaX={mouse_delta_x}, DeltaY={mouse_delta_y}, Unk={parsed['MouseUnk']}, Distance={parsed['MouseDistance']}")
     print(f"Mag: X={parsed['MagX']}, Y={parsed['MagY']}, Z={parsed['MagZ']}")
     print(f"Accel: X={parsed['AccelX']}, Y={parsed['AccelY']}, Z={parsed['AccelZ']}")
     print(f"Gyro: X={parsed['GyroX']}, Y={parsed['GyroY']}, Z={parsed['GyroZ']}")
